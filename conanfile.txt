@@ -1,0 +1,8 @@
+[requires]
+argon2/master@matthieu/testing
+gnutls/3.6.2@mlongo/testing
+msgpack-c/3.0.1@mlongo/testing
+nettle/3.4@DEGoodmanWilson/stable
+
+[generators]
+cmake

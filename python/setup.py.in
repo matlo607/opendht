@@ -21,6 +21,7 @@
 #    along with OpenDHT Python Wrapper. If not, see <https://www.gnu.org/licenses/>.
 #
 
+from os import path
 from setuptools import setup, Extension
 from Cython.Build import cythonize
 from Cython.Distutils import build_ext
@@ -48,11 +49,19 @@ setup(name="opendht",
       ext_modules = cythonize(Extension(
           "opendht",
           ["@CURRENT_SOURCE_DIR@/opendht.pyx"],
-          include_dirs = ['@PROJECT_SOURCE_DIR@/include'],
+          include_dirs = [
+              '@PROJECT_SOURCE_DIR@/include',
+              '@MSGPACK_INCLUDE_DIR@',
+              '@GNUTLS_INCLUDE_DIR@'
+          ],
           language="c++",
           extra_compile_args=["-std=c++11"],
           extra_link_args=["-std=c++11"],
           libraries=["opendht"],
-          library_dirs = ['@CURRENT_BINARY_DIR@', '@PROJECT_BINARY_DIR@']
+          library_dirs = [
+              '@CURRENT_BINARY_DIR@',
+              '@PROJECT_BINARY_DIR@',
+              path.dirname('@GNUTLS_LIBRARY@')
+          ]
       ))
 )

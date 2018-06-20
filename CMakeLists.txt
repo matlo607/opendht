@@ -6,6 +6,10 @@ set (opendht_VERSION ${opendht_VERSION_MAJOR}.${opendht_VERSION_MINOR})
 set (PACKAGE_VERSION ${opendht_VERSION})
 set (VERSION "${opendht_VERSION}")
 
+if (NOT CMAKE_BUILD_TYPE)
+    set(CMAKE_BUILD_TYPE Debug)
+endif ()
+
 # Options
 option (OPENDHT_STATIC "Build static library" ON)
 option (OPENDHT_SHARED "Build shared library" ON)
@@ -26,27 +30,51 @@ option (OPENDHT_TESTS "Add unit tests executable" OFF)
 find_package(Doxygen)
 option (OPENDHT_DOCUMENTATION "Create and install the HTML based API documentation (requires Doxygen)" ${DOXYGEN_FOUND})
 
+find_program (CONAN_BIN conan)
+if(CONAN_BIN)
+    message (STATUS "Found conan C++ package manager: ${CONAN_BIN}")
+    find_file (CONANFILE NAMES "conanfile.txt" HINTS "${CMAKE_SOURCE_DIR}")
+    if (CONANFILE)
+        message (STATUS "Found ${CONANFILE}")
+        if (NOT EXISTS "${CMAKE_BINARY_DIR}/conanbuildinfo.cmake")
+            message(STATUS "Trying to execute 'conan install'")
+            get_filename_component(CONANFILE_DIR ${CONANFILE} DIRECTORY)
+            execute_process(COMMAND conan install ${CONANFILE_DIR} --build=missing)
+        endif()
+
+        if (EXISTS "${CMAKE_BINARY_DIR}/conanbuildinfo.cmake")
+            include(${CMAKE_BINARY_DIR}/conanbuildinfo.cmake)
+            message(STATUS "conan_basic_setups()")
+            conan_basic_setup()
+        else()
+            message(WARNING "Please run 'conan install' if you plan to use conan")
+        endif()
+    endif()
+endif()
+
 # Dependencies
 list (APPEND CMAKE_MODULE_PATH "${PROJECT_SOURCE_DIR}/cmake")
 find_package (Threads)
 find_package (PkgConfig)
 find_package (GnuTLS 3.3 REQUIRED)
-pkg_search_module (Nettle nettle)
+find_package (Nettle REQUIRED)
 find_package (Msgpack 1.2 REQUIRED)
+find_package (Argon2 REQUIRED)
 if (OPENDHT_TOOLS)
     find_package (Readline 6 REQUIRED)
 endif ()
-if (NOT OPENDHT_ARGON2)
-    find_package(PkgConfig)
-    pkg_search_module(argon2 libargon2)
-    if (argon2_FOUND)
-        message("Argon2 found " ${argon2_req})
-        set(argon2_lib ", libargon2")
-    else ()
-        message("Argon2 not found, using included version.")
-        set(OPENDHT_ARGON2 ON)
-    endif()
-endif ()
+
+#if (NOT OPENDHT_ARGON2)
+#    find_package(PkgConfig)
+#    pkg_search_module(argon2 libargon2)
+#    if (argon2_FOUND)
+#        message("Argon2 found " ${argon2_req})
+#        set(argon2_lib ", libargon2")
+#    else ()
+#        message("Argon2 not found, using included version.")
+#        set(OPENDHT_ARGON2 ON)
+#    endif()
+#endif ()
 
 pkg_search_module(Jsoncpp jsoncpp)
 if (Jsoncpp_FOUND)
@@ -67,28 +95,31 @@ endif()
 # Build flags
 set (CMAKE_CXX_STANDARD 11)
 set (CMAKE_CXX_STANDARD_REQUIRED on)
-set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-return-type -Wall -Wextra -Wnon-virtual-dtor -pedantic-errors -fvisibility=hidden")
-if (OPENDHT_SANITIZE)
-    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fstack-protector-strong")
-endif ()
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-return-type -Wall -Wextra -Wnon-virtual-dtor -pedantic-errors -fvisibility=hidden")
+
+    if (OPENDHT_SANITIZE)
+        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsanitize=address -fstack-protector-strong")
+    endif ()
+
+    if (OPENDHT_LTO)
+        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto")
+        if (CMAKE_COMPILER_IS_GNUCC)
+            set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fuse-linker-plugin")
+            set (CMAKE_AR        "gcc-ar")
+            set (CMAKE_NM        "gcc-nm")
+            set (CMAKE_RANLIB    "gcc-ranlib")
+        endif ()
+    endif ()
+endif()
+
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -DMSGPACK_DISABLE_LEGACY_NIL -DMSGPACK_DISABLE_LEGACY_CONVERT")
-if (NOT CMAKE_BUILD_TYPE)
-    set(CMAKE_BUILD_TYPE Release)
-endif ()
+
 if (OPENDHT_LOG)
     add_definitions(-DOPENDHT_LOG=true)
 else ()
     add_definitions(-DOPENDHT_LOG=false)
 endif()
-if (OPENDHT_LTO)
-    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -flto")
-    if (CMAKE_COMPILER_IS_GNUCC)
-        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fuse-linker-plugin")
-        set (CMAKE_AR        "gcc-ar")
-        set (CMAKE_NM        "gcc-nm")
-        set (CMAKE_RANLIB    "gcc-ranlib")
-    endif ()
-endif ()
 
 if (MSGPACK_INCLUDE_DIRS)
     include_directories (SYSTEM "${MSGPACK_INCLUDE_DIRS}")
@@ -96,16 +127,12 @@ endif ()
 if (GNUTLS_INCLUDE_DIRS)
     include_directories (SYSTEM "${GNUTLS_INCLUDE_DIRS}")
 endif ()
-if (Nettle_INCLUDE_DIRS)
-    include_directories (SYSTEM "${Nettle_INCLUDE_DIRS}")
-endif ()
 if (RESTBED_INCLUDE)
     include_directories (SYSTEM "${RESTBED_INCLUDE}")
 endif ()
 if (Jsoncpp_INCLUDE_DIRS)
     include_directories (SYSTEM "${Jsoncpp_INCLUDE_DIRS}")
 endif ()
-link_directories (${Nettle_LIBRARY_DIRS})
 link_directories (${Jsoncpp_LIBRARY_DIRS})
 include_directories (
     ./
@@ -222,22 +249,22 @@ if (OPENDHT_PROXY_SERVER OR OPENDHT_PROXY_CLIENT)
   )
 endif ()
 
-if(OPENDHT_ARGON2)
-    # make sure argon2 submodule is up to date and initialized
-    message("Initializing Argon2 submodule")
-    execute_process(COMMAND git submodule update --init)
-
-    # add local argon2 files to build
-    list (APPEND opendht_SOURCES
-        argon2/src/argon2.c
-        argon2/src/core.c
-        argon2/src/blake2/blake2b.c
-        argon2/src/thread.c
-        argon2/src/ref.c
-        argon2/src/encoding.c
-    )
-    include_directories(argon2/include/)
-endif()
+#if(OPENDHT_ARGON2)
+#    # make sure argon2 submodule is up to date and initialized
+#    message("Initializing Argon2 submodule")
+#    execute_process(COMMAND git submodule update --init)
+#
+#    # add local argon2 files to build
+#    list (APPEND opendht_SOURCES
+#        argon2/src/argon2.c
+#        argon2/src/core.c
+#        argon2/src/blake2/blake2b.c
+#        argon2/src/thread.c
+#        argon2/src/ref.c
+#        argon2/src/encoding.c
+#    )
+#    include_directories(argon2/include/)
+#endif()
 
 # Targets
 if (OPENDHT_STATIC)
@@ -249,13 +276,22 @@ if (OPENDHT_STATIC)
     if (OPENDHT_LTO)
         target_link_libraries(opendht-static -flto -fuse-linker-plugin)
     endif ()
-    if (OPENDHT_ARGON2)
-        target_include_directories(opendht-static SYSTEM PRIVATE argon2)
-    else ()
-        target_link_libraries(opendht-static ${argon2_LIBRARIES})
-        target_include_directories(opendht-static SYSTEM PRIVATE ${argon2_INCLUDE_DIRS})
-    endif ()
-    target_link_libraries(opendht-static ${CMAKE_THREAD_LIBS_INIT} ${GNUTLS_LIBRARIES} ${Nettle_LIBRARIES} ${Restbed_LIBRARIES} ${Jsoncpp_LIBRARIES})
+    #if (OPENDHT_ARGON2)
+    #    target_include_directories(opendht-static SYSTEM PRIVATE argon2)
+    #else ()
+    #    target_link_libraries(opendht-static ${argon2_LIBRARIES})
+    #    target_include_directories(opendht-static SYSTEM PRIVATE ${argon2_INCLUDE_DIRS})
+    #endif ()
+    target_link_libraries(opendht-static
+        PUBLIC
+        ${CMAKE_THREAD_LIBS_INIT}
+        ${GNUTLS_LIBRARIES}
+        Argon2::Argon2
+        Nettle::Hogweed
+        ${Restbed_LIBRARIES}
+        ${Jsoncpp_LIBRARIES}
+        gmp
+        )
     install (TARGETS opendht-static DESTINATION ${CMAKE_INSTALL_LIBDIR} EXPORT opendht)
 endif ()
 
@@ -270,13 +306,13 @@ if (OPENDHT_SHARED)
     if (OPENDHT_LTO)
         target_link_libraries(opendht PRIVATE -flto -fuse-linker-plugin)
     endif ()
-    if (OPENDHT_ARGON2)
-        target_include_directories(opendht SYSTEM PRIVATE argon2)
-    else ()
-        target_link_libraries(opendht PRIVATE ${argon2_LIBRARIES})
-        target_include_directories(opendht SYSTEM PRIVATE ${argon2_INCLUDE_DIRS})
-    endif ()
-    target_link_libraries(opendht PRIVATE ${CMAKE_THREAD_LIBS_INIT} ${GNUTLS_LIBRARIES} ${Nettle_LIBRARIES} ${Restbed_LIBRARIES} ${Jsoncpp_LIBRARIES})
+    #if (OPENDHT_ARGON2)
+    #    target_include_directories(opendht SYSTEM PRIVATE argon2)
+    #else ()
+    #    target_link_libraries(opendht PRIVATE ${argon2_LIBRARIES})
+    #    target_include_directories(opendht SYSTEM PRIVATE ${argon2_INCLUDE_DIRS})
+    #endif ()
+    target_link_libraries(opendht PRIVATE ${CMAKE_THREAD_LIBS_INIT} ${GNUTLS_LIBRARIES} Argon2::Argon2 Nettle::Hogweed ${Restbed_LIBRARIES} ${Jsoncpp_LIBRARIES})
     install (TARGETS opendht DESTINATION ${CMAKE_INSTALL_LIBDIR} EXPORT opendht)
 endif ()
 
@@ -303,7 +339,7 @@ configure_file (
 )
 
 # Install targets
-install (DIRECTORY include DESTINATION ${CMAKE_INSTALL_PREFIX})
+install (DIRECTORY "${CMAKE_SOURCE_DIR}/include" DESTINATION ${CMAKE_INSTALL_PREFIX})
 install (FILES ${CMAKE_CURRENT_BINARY_DIR}/opendht.pc DESTINATION ${CMAKE_INSTALL_LIBDIR}/pkgconfig)
 install (EXPORT opendht DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/opendht FILE opendhtConfig.cmake)
 install (FILES ${CMAKE_CURRENT_BINARY_DIR}/opendhtConfigVersion.cmake DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/opendht)
